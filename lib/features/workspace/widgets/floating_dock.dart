@@ -1,4 +1,6 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../core/theme/scriptum_theme.dart';
 import '../../../core/widgets/glass_container.dart';
 import '../../annotations/models/annotation_models.dart';
@@ -7,9 +9,11 @@ class FloatingDock extends StatelessWidget {
   final ScriptumTool selectedTool;
   final Color selectedColor;
   final double strokeSize;
+  final bool stylusOnlyMode;
   final ValueChanged<ScriptumTool> onToolSelected;
   final ValueChanged<Color> onColorSelected;
   final ValueChanged<double> onStrokeSizeChanged;
+  final ValueChanged<bool> onStylusOnlyChanged;
   final VoidCallback onInsertImageTap;
 
   const FloatingDock({
@@ -17,9 +21,11 @@ class FloatingDock extends StatelessWidget {
     required this.selectedTool,
     required this.selectedColor,
     required this.strokeSize,
+    required this.stylusOnlyMode,
     required this.onToolSelected,
     required this.onColorSelected,
     required this.onStrokeSizeChanged,
+    required this.onStylusOnlyChanged,
     required this.onInsertImageTap,
   });
 
@@ -34,12 +40,14 @@ class FloatingDock extends StatelessWidget {
       children: [
         // 1. Pop-up Color & Stroke Size Bar
         AnimatedSwitcher(
-          duration: const Duration(milliseconds: 260),
+          duration: const Duration(milliseconds: 280),
+          switchInCurve: Curves.easeOutBack,
+          switchOutCurve: Curves.easeInCubic,
           transitionBuilder: (child, animation) {
             return FadeTransition(
               opacity: animation,
               child: ScaleTransition(
-                scale: Tween<double>(begin: 0.92, end: 1.0).animate(animation),
+                scale: Tween<double>(begin: 0.90, end: 1.0).animate(animation),
                 alignment: Alignment.bottomCenter,
                 child: child,
               ),
@@ -49,19 +57,22 @@ class FloatingDock extends StatelessWidget {
               ? GlassContainer(
             key: const ValueKey('style_palette'),
             margin: const EdgeInsets.only(bottom: 12),
-            borderRadius: 22,
+            borderRadius: 24,
             padding: const EdgeInsets.symmetric(
-              horizontal: 18,
+              horizontal: 20,
               vertical: 10,
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Color Swatches
                 ...ScriptumTheme.inkColors.map((color) {
-                  final isSelected = selectedColor.toARGB32() == color.toARGB32();
+                  final isSelected =
+                      selectedColor.toARGB32() == color.toARGB32();
                   return GestureDetector(
-                    onTap: () => onColorSelected(color),
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      onColorSelected(color);
+                    },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       margin: const EdgeInsets.symmetric(horizontal: 5),
@@ -94,7 +105,6 @@ class FloatingDock extends StatelessWidget {
                   margin: const EdgeInsets.symmetric(horizontal: 14),
                   color: Colors.white.withValues(alpha: 0.15),
                 ),
-                // Stroke Thickness Slider
                 const Icon(Icons.line_weight_rounded, size: 16),
                 SizedBox(
                   width: 130,
@@ -120,22 +130,22 @@ class FloatingDock extends StatelessWidget {
               : const SizedBox.shrink(),
         ),
 
-        // 2. Primary Tool Dock
+        // 2. Primary Tool Dock + iOS Stylus Mode Switch
         GlassContainer(
-          borderRadius: 24,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          borderRadius: 26,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               _DockButton(
                 icon: Icons.pan_tool_alt_rounded,
-                tooltip: 'Pan & Zoom',
+                tooltip: 'Pan & Read',
                 isSelected: selectedTool == ScriptumTool.pan,
                 onTap: () => onToolSelected(ScriptumTool.pan),
               ),
               _DockButton(
                 icon: Icons.edit_rounded,
-                tooltip: 'Stylus Freehand',
+                tooltip: 'Stylus Pen',
                 isSelected: selectedTool == ScriptumTool.pen,
                 onTap: () => onToolSelected(ScriptumTool.pen),
               ),
@@ -147,15 +157,9 @@ class FloatingDock extends StatelessWidget {
               ),
               _DockButton(
                 icon: Icons.cleaning_services_rounded,
-                tooltip: 'Stroke Eraser',
+                tooltip: 'Eraser',
                 isSelected: selectedTool == ScriptumTool.eraser,
                 onTap: () => onToolSelected(ScriptumTool.eraser),
-              ),
-              Container(
-                height: 22,
-                width: 1,
-                margin: const EdgeInsets.symmetric(horizontal: 6),
-                color: Colors.white.withValues(alpha: 0.14),
               ),
               _DockButton(
                 icon: Icons.add_photo_alternate_rounded,
@@ -163,6 +167,62 @@ class FloatingDock extends StatelessWidget {
                 isSelected: false,
                 accentColor: ScriptumTheme.goldAccent,
                 onTap: onInsertImageTap,
+              ),
+
+              Container(
+                height: 24,
+                width: 1,
+                margin: const EdgeInsets.symmetric(horizontal: 10),
+                color: Colors.white.withValues(alpha: 0.14),
+              ),
+
+              // iOS-Style Stylus-Only / Hand Drawing Mode Toggle
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  color: Colors.white.withValues(alpha: 0.04),
+                  border: Border.all(
+                    color: stylusOnlyMode
+                        ? ScriptumTheme.cyanGlow.withValues(alpha: 0.35)
+                        : Colors.white.withValues(alpha: 0.08),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      stylusOnlyMode
+                          ? Icons.draw_rounded
+                          : Icons.touch_app_rounded,
+                      size: 17,
+                      color: stylusOnlyMode
+                          ? ScriptumTheme.cyanGlow
+                          : ScriptumTheme.goldAccent,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      stylusOnlyMode ? 'Stylus Only' : 'Hand + Stylus',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Transform.scale(
+                      scale: 0.78,
+                      child: CupertinoSwitch(
+                        value: stylusOnlyMode,
+                        activeTrackColor: ScriptumTheme.cyanGlow,
+                        onChanged: (val) {
+                          HapticFeedback.lightImpact();
+                          onStylusOnlyChanged(val);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -196,7 +256,10 @@ class _DockButton extends StatelessWidget {
         message: tooltip,
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onTap();
+          },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,

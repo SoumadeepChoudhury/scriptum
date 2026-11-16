@@ -10,6 +10,7 @@ class PageAnnotationOverlay extends StatefulWidget {
   final ScriptumTool activeTool;
   final Color activeColor;
   final double activeStrokeSize;
+  final bool stylusOnlyMode;
   final VoidCallback onAnnotationsChanged;
 
   const PageAnnotationOverlay({
@@ -19,6 +20,7 @@ class PageAnnotationOverlay extends StatefulWidget {
     required this.activeTool,
     required this.activeColor,
     required this.activeStrokeSize,
+    required this.stylusOnlyMode,
     required this.onAnnotationsChanged,
   });
 
@@ -28,25 +30,52 @@ class PageAnnotationOverlay extends StatefulWidget {
 
 class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
   InkStroke? _currentStroke;
+  int? _activeDrawingPointer;
+  final Set<int> _activeTouchPointers = {};
 
   bool get _isDrawingMode =>
       widget.activeTool == ScriptumTool.pen ||
           widget.activeTool == ScriptumTool.highlighter ||
           widget.activeTool == ScriptumTool.eraser;
 
-  void _handlePointerDown(PointerDownEvent event) {
-    if (!_isDrawingMode) return;
+  bool _isStylusEvent(PointerEvent event) {
+    return event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
+  }
 
-    final normX = (event.localPosition.dx / widget.pageSize.width).clamp(0.0, 1.0);
-    final normY = (event.localPosition.dy / widget.pageSize.height).clamp(0.0, 1.0);
+  void _handlePointerDown(PointerDownEvent event) {
+    final isStylus = _isStylusEvent(event);
+
+    if (!isStylus) {
+      _activeTouchPointers.add(event.pointer);
+      // Standard Tablet Behavior: 2+ fingers = Pinch-to-Zoom / Pan.
+      // Cancel any accidental single-finger stroke that just started.
+      if (_activeTouchPointers.length >= 2) {
+        if (_currentStroke != null && _activeDrawingPointer != null) {
+          setState(() {
+            _currentStroke = null;
+            _activeDrawingPointer = null;
+          });
+        }
+        return;
+      }
+    }
+
+    if (!_isDrawingMode) return;
+    if (widget.stylusOnlyMode && !isStylus) return;
+
+    final normX =
+    (event.localPosition.dx / widget.pageSize.width).clamp(0.0, 1.0);
+    final normY =
+    (event.localPosition.dy / widget.pageSize.height).clamp(0.0, 1.0);
+
+    _activeDrawingPointer = event.pointer;
 
     if (widget.activeTool == ScriptumTool.eraser) {
       _eraseNear(normX, normY);
       return;
     }
 
-    final isStylus = event.kind == PointerDeviceKind.stylus ||
-        event.kind == PointerDeviceKind.invertedStylus;
     final pressure = isStylus ? event.pressure.clamp(0.1, 1.0) : 0.5;
 
     setState(() {
@@ -62,10 +91,17 @@ class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
+    final isStylus = _isStylusEvent(event);
+
+    // Ignore movement if user is pinching with 2+ fingers
+    if (!isStylus && _activeTouchPointers.length >= 2) return;
+    if (event.pointer != _activeDrawingPointer) return;
     if (!_isDrawingMode) return;
 
-    final normX = (event.localPosition.dx / widget.pageSize.width).clamp(0.0, 1.0);
-    final normY = (event.localPosition.dy / widget.pageSize.height).clamp(0.0, 1.0);
+    final normX =
+    (event.localPosition.dx / widget.pageSize.width).clamp(0.0, 1.0);
+    final normY =
+    (event.localPosition.dy / widget.pageSize.height).clamp(0.0, 1.0);
 
     if (widget.activeTool == ScriptumTool.eraser) {
       _eraseNear(normX, normY);
@@ -75,8 +111,6 @@ class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
     final stroke = _currentStroke;
     if (stroke == null) return;
 
-    final isStylus = event.kind == PointerDeviceKind.stylus ||
-        event.kind == PointerDeviceKind.invertedStylus;
     final pressure = isStylus ? event.pressure.clamp(0.1, 1.0) : 0.5;
 
     setState(() {
@@ -87,17 +121,33 @@ class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
   }
 
   void _handlePointerUp(PointerUpEvent event) {
-    if (_currentStroke != null) {
+    _activeTouchPointers.remove(event.pointer);
+
+    if (event.pointer == _activeDrawingPointer) {
+      if (_currentStroke != null) {
+        setState(() {
+          widget.annotations.strokes.add(_currentStroke!);
+          widget.annotations.redoStrokes.clear();
+          _currentStroke = null;
+        });
+        widget.onAnnotationsChanged();
+      }
+      _activeDrawingPointer = null;
+    }
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    _activeTouchPointers.remove(event.pointer);
+    if (event.pointer == _activeDrawingPointer) {
       setState(() {
-        widget.annotations.strokes.add(_currentStroke!);
         _currentStroke = null;
+        _activeDrawingPointer = null;
       });
-      widget.onAnnotationsChanged();
     }
   }
 
   void _eraseNear(double normX, double normY) {
-    const eraseThreshold = 0.03; // 3% of page dimension
+    const eraseThreshold = 0.03;
     final beforeCount = widget.annotations.strokes.length;
 
     widget.annotations.strokes.removeWhere((stroke) {
@@ -116,6 +166,11 @@ class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.pageSize.isFinite ||
+        widget.pageSize.width <= 0 ||
+        widget.pageSize.height <= 0) {
+      return const SizedBox.shrink();
+    }
     return SizedBox(
       width: widget.pageSize.width,
       height: widget.pageSize.height,
@@ -165,7 +220,6 @@ class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
                         ),
                       ),
                     ),
-                    // Delete Image Button
                     Positioned(
                       top: -10,
                       right: -10,
@@ -192,7 +246,6 @@ class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
                         ),
                       ),
                     ),
-                    // Bottom-Right Resize Handle
                     Positioned(
                       bottom: -10,
                       right: -10,
@@ -228,20 +281,25 @@ class _PageAnnotationOverlayState extends State<PageAnnotationOverlay> {
             );
           }),
 
-          // 2. Freehand Stylus & Highlighter Vector Canvas
+          // 2. GPU-Cached Freehand Stylus & Highlighter Vector Canvas
           Positioned.fill(
             child: IgnorePointer(
               ignoring: !_isDrawingMode,
               child: Listener(
-                behavior: HitTestBehavior.opaque,
+                behavior: HitTestBehavior.translucent,
                 onPointerDown: _handlePointerDown,
                 onPointerMove: _handlePointerMove,
                 onPointerUp: _handlePointerUp,
-                child: CustomPaint(
-                  painter: _FreehandCalligraphyPainter(
-                    strokes: widget.annotations.strokes,
-                    currentStroke: _currentStroke,
-                    pageSize: widget.pageSize,
+                onPointerCancel: _handlePointerCancel,
+                child: RepaintBoundary(
+                  child: CustomPaint(
+                    isComplex: true,
+                    willChange: _currentStroke != null,
+                    painter: _FreehandCalligraphyPainter(
+                      strokes: widget.annotations.strokes,
+                      currentStroke: _currentStroke,
+                      pageSize: widget.pageSize,
+                    ),
                   ),
                 ),
               ),
